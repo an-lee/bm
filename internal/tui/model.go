@@ -68,7 +68,9 @@ type rootModel struct {
 	searchMediaType string
 	lastSearchQuery string
 
-	toast string
+	toast       string
+	helpOpen    bool
+	quitConfirm bool
 }
 
 func newRootModel(ap *app.App) *rootModel {
@@ -128,6 +130,17 @@ func (m *rootModel) tickToast() tea.Cmd {
 	})
 }
 
+// globalKeysBlocked is true when top-level shortcuts (1–4, tab) would steal keys from a focused text field.
+func (m *rootModel) globalKeysBlocked() bool {
+	if m.tab == tabSearch && m.searchInput.Focused() {
+		return true
+	}
+	if m.tab == tabAddons && m.addonURLMode && m.addonURL.Focused() {
+		return true
+	}
+	return false
+}
+
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -140,8 +153,40 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
+		ks := msg.String()
+
+		if m.helpOpen {
+			switch ks {
+			case "esc", "?", "q":
+				m.helpOpen = false
+				return m, nil
+			case "ctrl+c":
+				m.helpOpen = false
+				return m, nil
+			}
+			return m, nil
+		}
+
+		if m.quitConfirm {
+			switch ks {
+			case "y", "Y":
+				return m, tea.Quit
+			case "n", "N", "esc":
+				m.quitConfirm = false
+				return m, nil
+			case "ctrl+c":
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
+		if ks == "?" || msg.Type == tea.KeyF1 {
+			m.quitConfirm = false
+			m.helpOpen = !m.helpOpen
+			return m, nil
+		}
+
+		if ks == "esc" {
 			if m.addonURLMode {
 				m.addonURLMode = false
 				m.addonURL.Blur()
@@ -150,27 +195,36 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.tab == tabStreams {
 				return m.backFromStreams()
 			}
-			return m, tea.Quit
-		case "ctrl+c":
-			return m, tea.Quit
-		case "tab":
-			m.tab = (m.tab + 1) % 4
-			return m, m.onTabChange()
-		case "shift+tab":
-			m.tab = (m.tab + 3) % 4
-			return m, m.onTabChange()
-		case "1":
-			m.tab = tabSearch
-			return m, m.onTabChange()
-		case "2":
-			m.tab = tabStreams
-			return m, m.onTabChange()
-		case "3":
-			m.tab = tabAddons
-			return m, m.onTabChange()
-		case "4":
-			m.tab = tabSettings
-			return m, m.onTabChange()
+			m.quitConfirm = true
+			return m, nil
+		}
+
+		if ks == "ctrl+c" {
+			m.quitConfirm = true
+			return m, nil
+		}
+
+		if !m.globalKeysBlocked() {
+			switch ks {
+			case "tab":
+				m.tab = (m.tab + 1) % 4
+				return m, m.onTabChange()
+			case "shift+tab":
+				m.tab = (m.tab + 3) % 4
+				return m, m.onTabChange()
+			case "1":
+				m.tab = tabSearch
+				return m, m.onTabChange()
+			case "2":
+				m.tab = tabStreams
+				return m, m.onTabChange()
+			case "3":
+				m.tab = tabAddons
+				return m, m.onTabChange()
+			case "4":
+				m.tab = tabSettings
+				return m, m.onTabChange()
+			}
 		}
 
 		switch m.tab {
@@ -241,6 +295,19 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *rootModel) onTabChange() tea.Cmd {
+	m.quitConfirm = false
+
+	if m.tab != tabSearch {
+		m.searchInput.Blur()
+	}
+	if m.tab != tabSettings {
+		m.settingsInput.Blur()
+	}
+	if m.tab != tabAddons {
+		m.addonURLMode = false
+		m.addonURL.Blur()
+	}
+
 	if m.tab == tabSearch {
 		return textinput.Blink
 	}
@@ -248,7 +315,6 @@ func (m *rootModel) onTabChange() tea.Cmd {
 		m.settingsInput.Focus()
 		return textinput.Blink
 	}
-	m.settingsInput.Blur()
 	return nil
 }
 
@@ -295,7 +361,7 @@ func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if it, ok := m.searchList.SelectedItem().(titleItem); ok {
 			m.selected = &it.r
 			m.tab = tabStreams
-			return m, m.loadStreamsForSelection()
+			return m, tea.Batch(m.loadStreamsForSelection(), m.onTabChange())
 		}
 		return m, nil
 	default:
@@ -381,6 +447,18 @@ func (m *rootModel) loadStreamsForSelection() tea.Cmd {
 	}
 }
 
+func (m *rootModel) cycleStreamsAddon(delta int) (tea.Model, tea.Cmd) {
+	if len(m.streamAddonTabs) <= 1 {
+		return m, nil
+	}
+	n := len(m.streamAddonTabs)
+	m.streamsAddonTabIdx = (n + m.streamsAddonTabIdx + delta) % n
+	cnt := m.applyStreamsAddonFilter()
+	tab := m.streamAddonTabs[m.streamsAddonTabIdx]
+	m.toast = fmt.Sprintf("%s · %d streams", tab.label, cnt)
+	return m, m.tickToast()
+}
+
 func (m *rootModel) updateStreams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "b":
@@ -389,24 +467,10 @@ func (m *rootModel) updateStreams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selected != nil {
 			return m, m.loadStreamsForSelection()
 		}
-	case "[":
-		if len(m.streamAddonTabs) <= 1 {
-			return m, nil
-		}
-		m.streamsAddonTabIdx = (len(m.streamAddonTabs) + m.streamsAddonTabIdx - 1) % len(m.streamAddonTabs)
-		n := m.applyStreamsAddonFilter()
-		tab := m.streamAddonTabs[m.streamsAddonTabIdx]
-		m.toast = fmt.Sprintf("%s · %d streams", tab.label, n)
-		return m, m.tickToast()
-	case "]":
-		if len(m.streamAddonTabs) <= 1 {
-			return m, nil
-		}
-		m.streamsAddonTabIdx = (m.streamsAddonTabIdx + 1) % len(m.streamAddonTabs)
-		n := m.applyStreamsAddonFilter()
-		tab := m.streamAddonTabs[m.streamsAddonTabIdx]
-		m.toast = fmt.Sprintf("%s · %d streams", tab.label, n)
-		return m, m.tickToast()
+	case "[", "h":
+		return m.cycleStreamsAddon(-1)
+	case "]", "l":
+		return m.cycleStreamsAddon(1)
 	case "enter":
 		if it, ok := m.streamsList.SelectedItem().(streamItem); ok {
 			u := it.s.PlayableURL()
@@ -520,68 +584,108 @@ func (m *rootModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *rootModel) renderHelpPanel() string {
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).Render("Keyboard shortcuts")
+	text := strings.Join([]string{
+		"",
+		"Tabs: 1–4 jump · Tab / Shift+Tab cycle (disabled while search or manifest URL field is focused)",
+		"",
+		"Search: Enter run search · ↓ move to results · Enter open streams · ctrl+t or t toggle movie/series",
+		"",
+		"Streams: Enter copy URL · esc or b back · r reload · [ ] or h l switch addon filter (when multiple addons)",
+		"",
+		"Addons: a add manifest · d remove · c configure in browser",
+		"",
+		"Settings: Enter save TMDB key",
+		"",
+		"Quit: esc or ctrl+c once to confirm, then y or ctrl+c again · n or esc cancels",
+		"",
+		"? or F1 toggles this help · esc or q closes",
+	}, "\n")
+	panel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(0, 1).
+		Width(max(40, m.width-8)).
+		Render(lipgloss.JoinVertical(lipgloss.Left, title, dim.Render(text)))
+	return panel
+}
+
 func (m *rootModel) View() string {
 	if m.width == 0 {
 		return "Loading…"
 	}
 	tabBar := m.renderTabs()
 	var body string
-	switch m.tab {
-	case tabSearch:
-		typeLine := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
-			fmt.Sprintf("Type: %s · ctrl+t toggle · t toggle (from results list)", m.searchMediaType))
-		body = lipgloss.JoinVertical(lipgloss.Left,
-			m.searchInput.View(),
-			typeLine,
-			"",
-			m.searchList.View(),
-		)
-	case tabStreams:
-		head := "Pick a stream, Enter copies URL. esc or b → back to search."
-		if m.selected != nil {
-			head = fmt.Sprintf("%s (%s) — %s", m.selected.Title, m.selected.IMDBID, m.selected.Type)
-		}
-		if m.streamsBusy {
-			head += "\nLoading…"
-		}
-		addonStrip := ""
-		if len(m.streamAddonTabs) > 1 {
-			addonStrip = m.renderStreamsAddonTabs() + "\n"
-		}
-		body = lipgloss.JoinVertical(lipgloss.Left, head, addonStrip, m.streamsList.View())
-	case tabAddons:
-		extra := ""
-		if m.addonURLMode {
-			extra = lipgloss.JoinVertical(lipgloss.Left,
+	if !m.helpOpen {
+		switch m.tab {
+		case tabSearch:
+			typeLine := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
+				fmt.Sprintf("Type: %s · ctrl+t toggle · t toggle (from results list)", m.searchMediaType))
+			body = lipgloss.JoinVertical(lipgloss.Left,
+				m.searchInput.View(),
+				typeLine,
 				"",
-				"Manifest URL:",
-				m.addonURL.View(),
-				"(Enter to install, esc cancel)",
+				m.searchList.View(),
+			)
+		case tabStreams:
+			head := "Pick a stream, Enter copies URL. esc or b → back to search."
+			if m.selected != nil {
+				head = fmt.Sprintf("%s (%s) — %s", m.selected.Title, m.selected.IMDBID, m.selected.Type)
+			}
+			if m.streamsBusy {
+				head += "\nLoading…"
+			}
+			addonStrip := ""
+			if len(m.streamAddonTabs) > 1 {
+				addonStrip = m.renderStreamsAddonTabs() + "\n"
+			}
+			body = lipgloss.JoinVertical(lipgloss.Left, head, addonStrip, m.streamsList.View())
+		case tabAddons:
+			extra := ""
+			if m.addonURLMode {
+				extra = lipgloss.JoinVertical(lipgloss.Left,
+					"",
+					"Manifest URL:",
+					m.addonURL.View(),
+					"(Enter to install, esc cancel)",
+				)
+			}
+			body = lipgloss.JoinVertical(lipgloss.Left,
+				"[a] add  [d] remove selected  [c] configure in browser",
+				m.addonList.View(),
+				extra,
+			)
+		case tabSettings:
+			body = lipgloss.JoinVertical(lipgloss.Left,
+				"TMDB API key (optional, improves search):",
+				m.settingsInput.View(),
+				"",
+				"Enter to save. Keys are stored in config.toml.",
 			)
 		}
-		body = lipgloss.JoinVertical(lipgloss.Left,
-			"[a] add  [d] remove selected  [c] configure in browser",
-			m.addonList.View(),
-			extra,
-		)
-	case tabSettings:
-		body = lipgloss.JoinVertical(lipgloss.Left,
-			"TMDB API key (optional, improves search):",
-			m.settingsInput.View(),
-			"",
-			"Enter to save. Keys are stored in config.toml.",
-		)
+	} else {
+		body = m.renderHelpPanel()
+	}
+
+	if m.quitConfirm && !m.helpOpen {
+		banner := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Bold(true).
+			Render("Quit?  y  confirm  ·  n / esc  cancel  ·  ctrl+c  confirm quit")
+		body = lipgloss.JoinVertical(lipgloss.Left, banner, "", body)
 	}
 
 	toast := ""
 	if m.toast != "" {
 		toast = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(m.toast)
 	}
-	helpStr := "tab switch · 1-4 tabs · esc or ctrl+c quit"
-	if m.tab == tabStreams {
-		helpStr = "tab switch · 1-4 tabs · esc/b back to search · ctrl+c quit"
+	helpStr := "? help · tab / 1–4 tabs · esc or ctrl+c to quit (confirm)"
+	if m.tab == tabStreams && !m.helpOpen {
+		helpStr = "? help · tab / 1–4 tabs · esc/b back · ctrl+c quit (confirm)"
 		if len(m.streamAddonTabs) > 1 {
-			helpStr += " · [/] addon filter"
+			helpStr += " · [ ] / h l addon filter"
 		}
 	}
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(helpStr)
@@ -667,7 +771,12 @@ func (m *rootModel) renderStreamsAddonTabs() string {
 		cells = append(cells, st.Render(tab.label))
 	}
 	prefix := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Addons: ")
-	return prefix + lipgloss.JoinHorizontal(lipgloss.Top, cells...)
+	line := prefix + lipgloss.JoinHorizontal(lipgloss.Top, cells...)
+	if len(m.streamAddonTabs) > 1 {
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("  ·  [ ] or h l  filter")
+		line += hint
+	}
+	return line
 }
 
 func (m *rootModel) renderTabs() string {
