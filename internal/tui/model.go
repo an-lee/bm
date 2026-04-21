@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +33,12 @@ type statusMsg struct {
 }
 type toastClearMsg struct{}
 
+// streamAddonTab is one filter chip on the Streams tab ("All" or a single addon).
+type streamAddonTab struct {
+	label   string
+	addonID string // empty means all addons (first tab only)
+}
+
 // rootModel is the Bubble Tea root; use pointer receiver so updates persist.
 type rootModel struct {
 	app *app.App
@@ -43,9 +51,12 @@ type rootModel struct {
 	searchItems []list.Item
 
 	streamsList list.Model
-	streamItems []list.Item
 	selected    *search.TitleResult
 	streamsBusy bool
+
+	allResolvedStreams []streams.ResolvedStream
+	streamAddonTabs    []streamAddonTab
+	streamsAddonTabIdx int
 
 	addonList    list.Model
 	addonItems   []list.Item
@@ -54,8 +65,8 @@ type rootModel struct {
 
 	settingsInput textinput.Model
 
-	searchMediaType   string
-	lastSearchQuery   string
+	searchMediaType string
+	lastSearchQuery string
 
 	toast string
 }
@@ -130,12 +141,17 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "esc":
+		case "esc":
 			if m.addonURLMode {
 				m.addonURLMode = false
 				m.addonURL.Blur()
 				return m, nil
 			}
+			if m.tab == tabStreams {
+				return m.backFromStreams()
+			}
+			return m, tea.Quit
+		case "ctrl+c":
 			return m, tea.Quit
 		case "tab":
 			m.tab = (m.tab + 1) % 4
@@ -183,16 +199,24 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamsDoneMsg:
 		m.streamsBusy = false
-		m.streamItems = make([]list.Item, 0, len(msg))
-		for _, s := range msg {
-			m.streamItems = append(m.streamItems, streamItem{s: s})
+		if m.selected == nil {
+			return m, nil
 		}
-		m.streamsList.SetItems(m.streamItems)
-		m.toast = fmt.Sprintf("%d streams", len(msg))
+		m.allResolvedStreams = slices.Clone(msg)
+		m.streamAddonTabs = buildStreamAddonTabs(m.allResolvedStreams)
+		m.streamsAddonTabIdx = 0
+		n := m.applyStreamsAddonFilter()
+		m.toast = fmt.Sprintf("%d streams", n)
 		return m, m.tickToast()
 
 	case streamsErrMsg:
 		m.streamsBusy = false
+		if m.selected == nil {
+			return m, nil
+		}
+		m.allResolvedStreams = nil
+		m.streamAddonTabs = nil
+		m.streamsAddonTabIdx = 0
 		m.toast = "streams: " + msg.err.Error()
 		return m, m.tickToast()
 
@@ -315,14 +339,29 @@ func normalizeSearchMediaType(s string) string {
 	return "movie"
 }
 
+func (m *rootModel) backFromStreams() (tea.Model, tea.Cmd) {
+	m.tab = tabSearch
+	m.selected = nil
+	m.streamsBusy = false
+	m.allResolvedStreams = nil
+	m.streamAddonTabs = nil
+	m.streamsAddonTabIdx = 0
+	m.streamsList.SetItems(nil)
+	m.streamsList.Title = "Streams"
+	return m, m.onTabChange()
+}
+
 func (m *rootModel) loadStreamsForSelection() tea.Cmd {
 	if m.selected == nil {
 		return nil
 	}
 	sel := *m.selected
 	m.streamsBusy = true
-	m.streamItems = nil
+	m.allResolvedStreams = nil
+	m.streamAddonTabs = nil
+	m.streamsAddonTabIdx = 0
 	m.streamsList.SetItems(nil)
+	m.streamsList.Title = "Streams"
 	imdb := sel.IMDBID
 	metaType := sel.Type
 	if metaType == "" {
@@ -344,10 +383,30 @@ func (m *rootModel) loadStreamsForSelection() tea.Cmd {
 
 func (m *rootModel) updateStreams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "b":
+		return m.backFromStreams()
 	case "r":
 		if m.selected != nil {
 			return m, m.loadStreamsForSelection()
 		}
+	case "[":
+		if len(m.streamAddonTabs) <= 1 {
+			return m, nil
+		}
+		m.streamsAddonTabIdx = (len(m.streamAddonTabs) + m.streamsAddonTabIdx - 1) % len(m.streamAddonTabs)
+		n := m.applyStreamsAddonFilter()
+		tab := m.streamAddonTabs[m.streamsAddonTabIdx]
+		m.toast = fmt.Sprintf("%s · %d streams", tab.label, n)
+		return m, m.tickToast()
+	case "]":
+		if len(m.streamAddonTabs) <= 1 {
+			return m, nil
+		}
+		m.streamsAddonTabIdx = (m.streamsAddonTabIdx + 1) % len(m.streamAddonTabs)
+		n := m.applyStreamsAddonFilter()
+		tab := m.streamAddonTabs[m.streamsAddonTabIdx]
+		m.toast = fmt.Sprintf("%s · %d streams", tab.label, n)
+		return m, m.tickToast()
 	case "enter":
 		if it, ok := m.streamsList.SelectedItem().(streamItem); ok {
 			u := it.s.PlayableURL()
@@ -478,14 +537,18 @@ func (m *rootModel) View() string {
 			m.searchList.View(),
 		)
 	case tabStreams:
-		head := "Pick a stream, Enter copies URL."
+		head := "Pick a stream, Enter copies URL. esc or b → back to search."
 		if m.selected != nil {
 			head = fmt.Sprintf("%s (%s) — %s", m.selected.Title, m.selected.IMDBID, m.selected.Type)
 		}
 		if m.streamsBusy {
 			head += "\nLoading…"
 		}
-		body = lipgloss.JoinVertical(lipgloss.Left, head, "", m.streamsList.View())
+		addonStrip := ""
+		if len(m.streamAddonTabs) > 1 {
+			addonStrip = m.renderStreamsAddonTabs() + "\n"
+		}
+		body = lipgloss.JoinVertical(lipgloss.Left, head, addonStrip, m.streamsList.View())
 	case tabAddons:
 		extra := ""
 		if m.addonURLMode {
@@ -514,7 +577,14 @@ func (m *rootModel) View() string {
 	if m.toast != "" {
 		toast = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(m.toast)
 	}
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("tab switch · 1-4 tabs · ctrl+c quit")
+	helpStr := "tab switch · 1-4 tabs · esc or ctrl+c quit"
+	if m.tab == tabStreams {
+		helpStr = "tab switch · 1-4 tabs · esc/b back to search · ctrl+c quit"
+		if len(m.streamAddonTabs) > 1 {
+			helpStr += " · [/] addon filter"
+		}
+	}
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(helpStr)
 
 	frame := lipgloss.NewStyle().
 		MaxWidth(m.width).
@@ -528,6 +598,76 @@ func (m *rootModel) View() string {
 			help,
 		))
 	return frame
+}
+
+func buildStreamAddonTabs(rows []streams.ResolvedStream) []streamAddonTab {
+	byID := make(map[string]string)
+	for _, r := range rows {
+		id := strings.TrimSpace(r.AddonID)
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(r.AddonName)
+		if name == "" {
+			name = id
+		}
+		byID[id] = name
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	tabs := []streamAddonTab{{label: "All", addonID: ""}}
+	for _, id := range ids {
+		tabs = append(tabs, streamAddonTab{label: byID[id], addonID: id})
+	}
+	return tabs
+}
+
+func (m *rootModel) applyStreamsAddonFilter() int {
+	if len(m.streamAddonTabs) == 0 {
+		m.streamsList.SetItems(nil)
+		m.streamsList.Title = "Streams"
+		return 0
+	}
+	if m.streamsAddonTabIdx < 0 || m.streamsAddonTabIdx >= len(m.streamAddonTabs) {
+		m.streamsAddonTabIdx = 0
+	}
+	tab := m.streamAddonTabs[m.streamsAddonTabIdx]
+	var filtered []streams.ResolvedStream
+	if tab.addonID == "" {
+		filtered = m.allResolvedStreams
+	} else {
+		for _, s := range m.allResolvedStreams {
+			if s.AddonID == tab.addonID {
+				filtered = append(filtered, s)
+			}
+		}
+	}
+	items := make([]list.Item, 0, len(filtered))
+	for _, s := range filtered {
+		items = append(items, streamItem{s: s})
+	}
+	m.streamsList.SetItems(items)
+	m.streamsList.Title = "Streams · " + tab.label
+	return len(filtered)
+}
+
+func (m *rootModel) renderStreamsAddonTabs() string {
+	var cells []string
+	for i, tab := range m.streamAddonTabs {
+		if i > 0 {
+			cells = append(cells, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(" | "))
+		}
+		st := lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("252"))
+		if i == m.streamsAddonTabIdx {
+			st = st.Foreground(lipgloss.Color("205")).Bold(true)
+		}
+		cells = append(cells, st.Render(tab.label))
+	}
+	prefix := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Addons: ")
+	return prefix + lipgloss.JoinHorizontal(lipgloss.Top, cells...)
 }
 
 func (m *rootModel) renderTabs() string {
