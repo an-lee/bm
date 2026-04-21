@@ -54,6 +54,9 @@ type rootModel struct {
 
 	settingsInput textinput.Model
 
+	searchMediaType   string
+	lastSearchQuery   string
+
 	toast string
 }
 
@@ -91,13 +94,14 @@ func newRootModel(ap *app.App) *rootModel {
 	tmdb.Width = 40
 
 	m := &rootModel{
-		app:           ap,
-		searchInput:   si,
-		searchList:    sl,
-		streamsList:   strl,
-		addonList:     al,
-		addonURL:      aui,
-		settingsInput: tmdb,
+		app:             ap,
+		searchInput:     si,
+		searchList:      sl,
+		streamsList:     strl,
+		addonList:       al,
+		addonURL:        aui,
+		settingsInput:   tmdb,
+		searchMediaType: normalizeSearchMediaType(ap.Config.UI.DefaultType),
 	}
 	m.refreshAddonList()
 	return m
@@ -239,6 +243,8 @@ func (m *rootModel) refreshAddonList() {
 func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.searchInput.Focused() {
 		switch msg.String() {
+		case "ctrl+t":
+			return m.toggleSearchType()
 		case "enter":
 			q := strings.TrimSpace(m.searchInput.Value())
 			if q == "" {
@@ -255,6 +261,8 @@ func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "ctrl+t", "t":
+		return m.toggleSearchType()
 	case "up", "down", "k", "j":
 		var cmd tea.Cmd
 		m.searchList, cmd = m.searchList.Update(msg)
@@ -275,15 +283,36 @@ func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *rootModel) runSearch(q string) tea.Cmd {
+	q = strings.TrimSpace(q)
+	m.lastSearchQuery = q
 	return func() tea.Msg {
 		ctx := context.Background()
-		typ := m.app.Config.UI.DefaultType
-		res, err := m.app.Search.Search(ctx, q, typ, 0)
+		res, err := m.app.Search.Search(ctx, q, m.searchMediaType, 0)
 		if err != nil {
 			return searchErrMsg{err}
 		}
 		return searchDoneMsg(res)
 	}
+}
+
+func (m *rootModel) toggleSearchType() (tea.Model, tea.Cmd) {
+	if m.searchMediaType == "movie" {
+		m.searchMediaType = "series"
+	} else {
+		m.searchMediaType = "movie"
+	}
+	if m.lastSearchQuery == "" {
+		m.toast = "Type: " + m.searchMediaType
+		return m, m.tickToast()
+	}
+	return m, m.runSearch(m.lastSearchQuery)
+}
+
+func normalizeSearchMediaType(s string) string {
+	if strings.TrimSpace(s) == "series" {
+		return "series"
+	}
+	return "movie"
 }
 
 func (m *rootModel) loadStreamsForSelection() tea.Cmd {
@@ -440,8 +469,11 @@ func (m *rootModel) View() string {
 	var body string
 	switch m.tab {
 	case tabSearch:
+		typeLine := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
+			fmt.Sprintf("Type: %s · ctrl+t toggle · t toggle (from results list)", m.searchMediaType))
 		body = lipgloss.JoinVertical(lipgloss.Left,
 			m.searchInput.View(),
+			typeLine,
 			"",
 			m.searchList.View(),
 		)
