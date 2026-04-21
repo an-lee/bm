@@ -9,11 +9,13 @@ import (
 
 	"bm/internal/app"
 	"bm/internal/clipboard"
+	"bm/internal/streams"
 )
 
 var streamSeason, streamEpisode int
 var streamType string
 var streamCopy bool
+var streamOrder string
 
 var streamCmd = &cobra.Command{
 	Use:   "stream <imdb_id>",
@@ -47,6 +49,9 @@ var streamCmd = &cobra.Command{
 		list, err := a.Streams.Resolve(ctx, imdbID, metaType, season, episode)
 		if err != nil {
 			return err
+		}
+		if strings.TrimSpace(streamOrder) != "" {
+			streams.ApplySort(list, streamOrder)
 		}
 		if jsonOutput {
 			out := make([]streamJSONRow, 0, len(list))
@@ -99,4 +104,5 @@ func init() {
 	streamCmd.Flags().IntVar(&streamEpisode, "episode", 0, "episode (series)")
 	streamCmd.Flags().StringVar(&streamType, "type", "", "movie or series (default from config)")
 	streamCmd.Flags().BoolVar(&streamCopy, "copy", false, "copy first playable URL to clipboard")
+	streamCmd.Flags().StringVar(&streamOrder, "order", "", "sort streams: rank, rank-asc, addon, title (overrides config ui.stream_order)")
 }

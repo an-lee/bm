@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 
@@ -88,9 +87,7 @@ func (r *Resolver) Resolve(ctx context.Context, imdbID, metaType string, season,
 	wg.Wait()
 
 	out = dedupeStreams(out)
-	sort.Slice(out, func(i, j int) bool {
-		return streamRank(out[i]) > streamRank(out[j])
-	})
+	ApplySort(out, r.cfg.UI.StreamOrder)
 	return out, nil
 }
 
@@ -133,22 +130,4 @@ func dedupeStreams(in []ResolvedStream) []ResolvedStream {
 		out = append(out, s)
 	}
 	return out
-}
-
-func streamRank(s ResolvedStream) int {
-	score := 0
-	if strings.TrimSpace(s.PlayableURL()) != "" {
-		score += 10
-	}
-	t := strings.ToLower(s.Title + " " + s.Name)
-	if strings.Contains(t, "1080") {
-		score += 3
-	}
-	if strings.Contains(t, "720") {
-		score += 2
-	}
-	if strings.Contains(t, "4k") || strings.Contains(t, "2160") {
-		score += 4
-	}
-	return score
 }

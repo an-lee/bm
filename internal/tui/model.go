@@ -57,6 +57,7 @@ type rootModel struct {
 	allResolvedStreams []streams.ResolvedStream
 	streamAddonTabs    []streamAddonTab
 	streamsAddonTabIdx int
+	streamListOrder    string
 
 	addonList    list.Model
 	addonItems   []list.Item
@@ -115,6 +116,7 @@ func newRootModel(ap *app.App) *rootModel {
 		addonURL:        aui,
 		settingsInput:   tmdb,
 		searchMediaType: normalizeSearchMediaType(ap.Config.UI.DefaultType),
+		streamListOrder: streams.NormalizeOrder(ap.Config.UI.StreamOrder),
 	}
 	m.refreshAddonList()
 	return m
@@ -257,6 +259,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.allResolvedStreams = slices.Clone(msg)
+		streams.ApplySort(m.allResolvedStreams, m.streamListOrder)
 		m.streamAddonTabs = buildStreamAddonTabs(m.allResolvedStreams)
 		m.streamsAddonTabIdx = 0
 		n := m.applyStreamsAddonFilter()
@@ -283,6 +286,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.toast = msg.text
 		_ = m.app.Reload()
+		m.streamListOrder = streams.NormalizeOrder(m.app.Config.UI.StreamOrder)
+		if len(m.allResolvedStreams) > 0 {
+			streams.ApplySort(m.allResolvedStreams, m.streamListOrder)
+			_ = m.applyStreamsAddonFilter()
+		}
 		m.refreshAddonList()
 		return m, m.tickToast()
 
@@ -447,6 +455,21 @@ func (m *rootModel) loadStreamsForSelection() tea.Cmd {
 	}
 }
 
+func (m *rootModel) cycleStreamSortOrder() (tea.Model, tea.Cmd) {
+	if m.streamsBusy || len(m.allResolvedStreams) == 0 {
+		return m, nil
+	}
+	m.streamListOrder = streams.NextStreamOrder(m.streamListOrder)
+	streams.ApplySort(m.allResolvedStreams, m.streamListOrder)
+	n := m.applyStreamsAddonFilter()
+	tabLabel := "All"
+	if len(m.streamAddonTabs) > 0 && m.streamsAddonTabIdx < len(m.streamAddonTabs) {
+		tabLabel = m.streamAddonTabs[m.streamsAddonTabIdx].label
+	}
+	m.toast = fmt.Sprintf("sort: %s · %s · %d streams", m.streamListOrder, tabLabel, n)
+	return m, m.tickToast()
+}
+
 func (m *rootModel) cycleStreamsAddon(delta int) (tea.Model, tea.Cmd) {
 	if len(m.streamAddonTabs) <= 1 {
 		return m, nil
@@ -467,6 +490,8 @@ func (m *rootModel) updateStreams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selected != nil {
 			return m, m.loadStreamsForSelection()
 		}
+	case "o":
+		return m.cycleStreamSortOrder()
 	case "[", "h":
 		return m.cycleStreamsAddon(-1)
 	case "]", "l":
@@ -593,7 +618,7 @@ func (m *rootModel) renderHelpPanel() string {
 		"",
 		"Search: Enter run search · ↓ move to results · Enter open streams · ctrl+t or t toggle movie/series",
 		"",
-		"Streams: Enter copy URL · esc or b back · r reload · [ ] or h l switch addon filter (when multiple addons)",
+		"Streams: Enter copy URL · esc or b back · r reload · o cycle sort (rank · rank-asc · addon · title) · [ ] or h l addon filter (when multiple addons)",
 		"",
 		"Addons: a add manifest · d remove · c configure in browser",
 		"",
@@ -637,11 +662,24 @@ func (m *rootModel) View() string {
 			if m.streamsBusy {
 				head += "\nLoading…"
 			}
+			sortHint := ""
+			if !m.streamsBusy && len(m.allResolvedStreams) > 0 {
+				sortHint = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
+					fmt.Sprintf("Sort: %s · o cycle (rank · rank-asc · addon · title)", m.streamListOrder))
+			}
 			addonStrip := ""
 			if len(m.streamAddonTabs) > 1 {
 				addonStrip = m.renderStreamsAddonTabs() + "\n"
 			}
-			body = lipgloss.JoinVertical(lipgloss.Left, head, addonStrip, m.streamsList.View())
+			streamSections := []string{head}
+			if sortHint != "" {
+				streamSections = append(streamSections, sortHint)
+			}
+			if addonStrip != "" {
+				streamSections = append(streamSections, addonStrip)
+			}
+			streamSections = append(streamSections, m.streamsList.View())
+			body = lipgloss.JoinVertical(lipgloss.Left, streamSections...)
 		case tabAddons:
 			extra := ""
 			if m.addonURLMode {
@@ -683,7 +721,7 @@ func (m *rootModel) View() string {
 	}
 	helpStr := "? help · tab / 1–4 tabs · esc or ctrl+c to quit (confirm)"
 	if m.tab == tabStreams && !m.helpOpen {
-		helpStr = "? help · tab / 1–4 tabs · esc/b back · ctrl+c quit (confirm)"
+		helpStr = "? help · tab / 1–4 tabs · esc/b back · ctrl+c quit (confirm) · o sort"
 		if len(m.streamAddonTabs) > 1 {
 			helpStr += " · [ ] / h l addon filter"
 		}

@@ -35,6 +35,8 @@ type Config struct {
 	} `mapstructure:"tmdb"`
 	UI struct {
 		DefaultType string `mapstructure:"default_type"`
+		// StreamOrder is one of: rank, rank-asc, addon, title (see streams.NormalizeOrder).
+		StreamOrder string `mapstructure:"stream_order"`
 	} `mapstructure:"ui"`
 	Addons []AddonEntry `mapstructure:"addons"`
 }
@@ -141,6 +143,7 @@ func Write(cfg *Config) error {
 	}
 	v.Set("ui", map[string]any{
 		"default_type": cfg.UI.DefaultType,
+		"stream_order": cfg.UI.StreamOrder,
 	})
 	addonMaps := make([]map[string]any, 0, len(cfg.Addons))
 	for _, a := range cfg.Addons {
