@@ -22,6 +22,21 @@ func (m *rootModel) clearStreamsListState() {
 	m.streamsList.Title = "Streams"
 }
 
+// streamsListTitle returns the list chrome title, including SxxEyy for series on the streams stage.
+func (m *rootModel) streamsListTitle(addonTabLabel string) string {
+	if m.selected == nil || m.effectiveMetaType() != "series" || m.streamsStage != stageStreams {
+		if addonTabLabel == "" {
+			return "Streams"
+		}
+		return "Streams · " + addonTabLabel
+	}
+	pfx := fmt.Sprintf("S%02dE%02d · ", m.seasonPick, m.episodePick)
+	if addonTabLabel == "" {
+		return pfx + "Streams"
+	}
+	return pfx + "Streams · " + addonTabLabel
+}
+
 func (m *rootModel) backToBrowse() (tea.Model, tea.Cmd) {
 	m.closeSearchInput()
 	m.tab = tabSearch
@@ -57,6 +72,9 @@ func (m *rootModel) loadStreamsForEpisode(season, episode int) tea.Cmd {
 	m.streamsBusy = true
 	m.clearStreamsListState()
 	metaType := m.effectiveMetaType()
+	if metaType == "series" {
+		m.streamsList.Title = m.streamsListTitle("")
+	}
 	s, e := season, episode
 	if metaType != "series" {
 		s, e = 0, 0
@@ -168,7 +186,7 @@ func buildStreamAddonTabs(rows []streams.ResolvedStream) []streamAddonTab {
 func (m *rootModel) applyStreamsAddonFilter() int {
 	if len(m.streamAddonTabs) == 0 {
 		m.streamsList.SetItems(nil)
-		m.streamsList.Title = "Streams"
+		m.streamsList.Title = m.streamsListTitle("")
 		return 0
 	}
 	if m.streamsAddonTabIdx < 0 || m.streamsAddonTabIdx >= len(m.streamAddonTabs) {
@@ -190,7 +208,7 @@ func (m *rootModel) applyStreamsAddonFilter() int {
 		items = append(items, streamItem{s: s})
 	}
 	m.streamsList.SetItems(items)
-	m.streamsList.Title = "Streams · " + tab.label
+	m.streamsList.Title = m.streamsListTitle(tab.label)
 	return len(filtered)
 }
 

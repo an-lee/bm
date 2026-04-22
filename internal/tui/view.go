@@ -47,9 +47,7 @@ func (m *rootModel) renderStreamsBreadcrumb() string {
 		case stageEpisodes:
 			parts = append(parts, "Episodes")
 		case stageStreams:
-			if m.seasonPick > 0 || m.episodePick > 0 {
-				parts = append(parts, fmt.Sprintf("S%02d", m.seasonPick), fmt.Sprintf("E%02d", m.episodePick))
-			}
+			parts = append(parts, fmt.Sprintf("S%02dE%02d", m.seasonPick, m.episodePick))
 		}
 	}
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(strings.Join(parts, " › "))
@@ -156,6 +154,11 @@ func (m *rootModel) renderStreamsBody() string {
 	head := "Pick a stream · Enter copies URL · esc or b back."
 	if m.streamsBusy {
 		head += "\nLoading streams…"
+	}
+	if m.effectiveMetaType() == "series" && m.streamsStage == stageStreams {
+		ep := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true).
+			Render(fmt.Sprintf("Season %d · Episode %d  (S%02dE%02d)", m.seasonPick, m.episodePick, m.seasonPick, m.episodePick))
+		head = head + "\n" + ep
 	}
 	sortHint := ""
 	if !m.streamsBusy && len(m.allResolvedStreams) > 0 {
