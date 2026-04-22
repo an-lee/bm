@@ -7,11 +7,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// osExit is overridden in tests to avoid terminating the test process.
+var osExit = os.Exit
+
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		osExit(1)
 	}
 }
 

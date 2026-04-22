@@ -30,7 +30,7 @@ install:
 	go install -ldflags "$(LDFLAGS)" "$(CMD)"
 
 test:
-	go test ./...
+	go test -p 1 ./...
 
 fmt:
 	gofmt -w .
