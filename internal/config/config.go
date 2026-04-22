@@ -35,7 +35,7 @@ type Config struct {
 	} `mapstructure:"tmdb"`
 	UI struct {
 		DefaultType string `mapstructure:"default_type"`
-		// StreamOrder is one of: rank, rank-asc, addon, title (see streams.NormalizeOrder).
+		// StreamOrder is one of: rank, rank-asc, addon, title, seeds, seeds-asc (see streams.NormalizeOrder).
 		StreamOrder string `mapstructure:"stream_order"`
 	} `mapstructure:"ui"`
 	Addons []AddonEntry `mapstructure:"addons"`

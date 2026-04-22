@@ -104,5 +104,5 @@ func init() {
 	streamCmd.Flags().IntVar(&streamEpisode, "episode", 0, "episode (series)")
 	streamCmd.Flags().StringVar(&streamType, "type", "", "movie or series (default from config)")
 	streamCmd.Flags().BoolVar(&streamCopy, "copy", false, "copy first playable URL to clipboard")
-	streamCmd.Flags().StringVar(&streamOrder, "order", "", "sort streams: rank, rank-asc, addon, title (overrides config ui.stream_order)")
+	streamCmd.Flags().StringVar(&streamOrder, "order", "", "sort streams: rank, rank-asc, addon, title, seeds, seeds-asc (overrides config ui.stream_order)")
 }

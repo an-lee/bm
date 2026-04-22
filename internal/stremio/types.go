@@ -79,6 +79,7 @@ type StreamResponse struct {
 type Stream struct {
 	Name          string         `json:"name"`
 	Title         string         `json:"title"`
+	Description   string         `json:"description,omitempty"`
 	URL           string         `json:"url"`
 	InfoHash      string         `json:"infoHash"`
 	FileIdx       *int           `json:"fileIdx"`

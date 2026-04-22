@@ -92,6 +92,26 @@ func (i streamItem) Title() string {
 
 func (i streamItem) Description() string {
 	u := i.s.PlayableURL()
+	if n, ok := streams.StreamSeedValue(i.s); ok {
+		if u == "" {
+			return fmt.Sprintf("%d seeds", n)
+		}
+		suffix := fmt.Sprintf(" · %d seeds", n)
+		if len(u)+len(suffix) <= 120 {
+			return u + suffix
+		}
+		maxU := 120 - len(suffix) - 3
+		if maxU <= 0 {
+			if len(u) > 120 {
+				return u[:117] + "..."
+			}
+			return u
+		}
+		if maxU < len(u) {
+			return u[:maxU] + "..." + suffix
+		}
+		return u + suffix
+	}
 	if len(u) > 120 {
 		return u[:117] + "..."
 	}

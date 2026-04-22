@@ -7,10 +7,12 @@ import (
 
 // Stream list sort modes (CLI --order, config ui.stream_order, TUI).
 const (
-	OrderRank    = "rank"
-	OrderRankAsc = "rank-asc"
-	OrderAddon   = "addon"
-	OrderTitle   = "title"
+	OrderRank     = "rank"
+	OrderRankAsc  = "rank-asc"
+	OrderAddon    = "addon"
+	OrderTitle    = "title"
+	OrderSeeds    = "seeds"
+	OrderSeedsAsc = "seeds-asc"
 )
 
 // NormalizeOrder maps user input to a known mode; empty defaults to rank.
@@ -24,15 +26,21 @@ func NormalizeOrder(s string) string {
 		return OrderAddon
 	case OrderTitle, "name":
 		return OrderTitle
+	case OrderSeeds, "seeders", "peer", "peers":
+		return OrderSeeds
+	case OrderSeedsAsc, "seeds-ascend", "fewest-seeds":
+		return OrderSeedsAsc
 	default:
 		return OrderRank
 	}
 }
 
-// NextStreamOrder cycles rank → rank-asc → addon → title → rank (for TUI).
+// NextStreamOrder cycles rank → rank-asc → addon → title → seeds → seeds-asc → rank (for TUI).
 func NextStreamOrder(current string) string {
-	const n = 4
-	cycle := [n]string{OrderRank, OrderRankAsc, OrderAddon, OrderTitle}
+	cycle := [...]string{
+		OrderRank, OrderRankAsc, OrderAddon, OrderTitle, OrderSeeds, OrderSeedsAsc,
+	}
+	const n = len(cycle)
 	cur := NormalizeOrder(current)
 	next := 0
 	for i := 0; i < n; i++ {
@@ -70,10 +78,50 @@ func ApplySort(slice []ResolvedStream, order string) {
 			}
 			return addonSortKey(slice[i]) < addonSortKey(slice[j])
 		})
+	case OrderSeeds:
+		sort.Slice(slice, lessSeedsDesc(slice))
+	case OrderSeedsAsc:
+		sort.Slice(slice, lessSeedsAsc(slice))
 	default: // rank
 		sort.Slice(slice, func(i, j int) bool {
 			return streamRank(slice[i]) > streamRank(slice[j])
 		})
+	}
+}
+
+// lessSeedsDesc orders by seed count (highest first); streams with unknown counts go last; tie-break by title.
+func lessSeedsDesc(slice []ResolvedStream) func(i, j int) bool {
+	return func(i, j int) bool {
+		ci, okI := StreamSeedValue(slice[i])
+		cj, okJ := StreamSeedValue(slice[j])
+		if okI != okJ {
+			return okI
+		}
+		if !okI {
+			return titleSortKey(slice[i]) < titleSortKey(slice[j])
+		}
+		if ci != cj {
+			return ci > cj
+		}
+		return titleSortKey(slice[i]) < titleSortKey(slice[j])
+	}
+}
+
+// lessSeedsAsc orders by seed count (lowest first); unknown counts go last; tie-break by title.
+func lessSeedsAsc(slice []ResolvedStream) func(i, j int) bool {
+	return func(i, j int) bool {
+		ci, okI := StreamSeedValue(slice[i])
+		cj, okJ := StreamSeedValue(slice[j])
+		if okI != okJ {
+			return okI
+		}
+		if !okI {
+			return titleSortKey(slice[i]) < titleSortKey(slice[j])
+		}
+		if ci != cj {
+			return ci < cj
+		}
+		return titleSortKey(slice[i]) < titleSortKey(slice[j])
 	}
 }
 
