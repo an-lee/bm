@@ -62,6 +62,35 @@ func (c *Client) GetManifest(ctx context.Context, manifestURL string) (*Manifest
 	return &m, nil
 }
 
+// CatalogGet performs GET /catalog/{type}/{catalogID}.json or, with extras,
+// /catalog/{type}/{catalogID}/{extra1}/.../{extraN}.json (e.g. skip=100).
+// Each extra must be a single path segment such as "skip=100" or "genre=Action"
+// (encode values with escapeCatalogValue if needed).
+func (c *Client) CatalogGet(ctx context.Context, baseURL, catalogType, catalogID string, extra ...string) (*CatalogResponse, error) {
+	rel := fmt.Sprintf("/catalog/%s/%s", url.PathEscape(strings.TrimSpace(catalogType)), url.PathEscape(strings.TrimSpace(catalogID)))
+	for _, e := range extra {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		rel += "/" + e
+	}
+	rel += ".json"
+	u, err := joinBasePath(baseURL, rel)
+	if err != nil {
+		return nil, err
+	}
+	body, err := c.get(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	var out CatalogResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decode catalog: %w", err)
+	}
+	return &out, nil
+}
+
 // CatalogSearch performs GET /catalog/{type}/{catalogID}/search={query}.json
 func (c *Client) CatalogSearch(ctx context.Context, baseURL, catalogType, catalogID, query string) (*CatalogResponse, error) {
 	u, err := joinBasePath(baseURL, fmt.Sprintf("/catalog/%s/%s/search=%s.json", catalogType, catalogID, escapeSearchSegment(query)))

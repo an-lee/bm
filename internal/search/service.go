@@ -59,6 +59,86 @@ func (s *Service) Search(ctx context.Context, query, mediaType string, year int)
 	return s.searchCatalog(ctx, query, mediaType)
 }
 
+// CinemetaPopular returns titles from Cinemeta's "Popular" catalog (id top).
+func (s *Service) CinemetaPopular(ctx context.Context, mediaType string, skip int) ([]TitleResult, error) {
+	return s.cinemetaCatalog(ctx, mediaType, "top", skip)
+}
+
+// CinemetaFeatured returns titles from Cinemeta's "Featured" catalog (id imdbRating).
+func (s *Service) CinemetaFeatured(ctx context.Context, mediaType string, skip int) ([]TitleResult, error) {
+	return s.cinemetaCatalog(ctx, mediaType, "imdbRating", skip)
+}
+
+func (s *Service) cinemetaCatalog(ctx context.Context, mediaType, catalogID string, skip int) ([]TitleResult, error) {
+	if mediaType != "movie" && mediaType != "series" {
+		mediaType = s.cfg.UI.DefaultType
+	}
+	entry, err := s.findEnabledCinemeta()
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.client.GetManifest(ctx, entry.ManifestURL)
+	if err != nil {
+		return nil, fmt.Errorf("cinemeta manifest: %w", err)
+	}
+	if !manifestHasCatalog(m, mediaType, catalogID) {
+		return nil, fmt.Errorf("cinemeta has no %s catalog %q", mediaType, catalogID)
+	}
+	base, err := stremio.BaseFromManifestURL(entry.ManifestURL)
+	if err != nil {
+		return nil, err
+	}
+	var extras []string
+	if skip > 0 {
+		extras = append(extras, fmt.Sprintf("skip=%d", skip))
+	}
+	resp, err := s.client.CatalogGet(ctx, base, mediaType, catalogID, extras...)
+	if err != nil {
+		return nil, err
+	}
+	return titleResultsFromMetas(resp.Metas), nil
+}
+
+func (s *Service) findEnabledCinemeta() (config.AddonEntry, error) {
+	for _, a := range s.cfg.Addons {
+		if a.ID == config.CinemetaAddonID && a.Enabled {
+			return a, nil
+		}
+	}
+	return config.AddonEntry{}, fmt.Errorf("Cinemeta addon is not installed or disabled; enable it to browse catalogs")
+}
+
+func manifestHasCatalog(m *stremio.Manifest, mediaType, catalogID string) bool {
+	for _, c := range m.Catalogs {
+		if c.Type == mediaType && c.ID == catalogID {
+			return true
+		}
+	}
+	return false
+}
+
+func titleResultsFromMetas(metas []stremio.Meta) []TitleResult {
+	out := make([]TitleResult, 0, len(metas))
+	for _, meta := range metas {
+		title := meta.Name
+		if title == "" {
+			title = meta.ID
+		}
+		imdb := meta.IMDBID
+		if imdb == "" {
+			imdb = meta.ID
+		}
+		out = append(out, TitleResult{
+			Title:    title,
+			Year:     firstNonEmpty(meta.ReleaseInfo, meta.Year),
+			Type:     meta.Type,
+			IMDBID:   imdb,
+			Overview: meta.Description,
+		})
+	}
+	return out
+}
+
 // ResolveIMDBID uses TMDB multi-search + external_ids (requires API key).
 func (s *Service) ResolveIMDBID(ctx context.Context, query string, year int) (string, error) {
 	if s.cfg.TMDB.APIKey == "" {
@@ -103,25 +183,7 @@ func (s *Service) searchCatalog(ctx context.Context, query, mediaType string) ([
 			lastErr = err
 			continue
 		}
-		out := make([]TitleResult, 0, len(resp.Metas))
-		for _, meta := range resp.Metas {
-			title := meta.Name
-			if title == "" {
-				title = meta.ID
-			}
-			imdb := meta.IMDBID
-			if imdb == "" {
-				imdb = meta.ID
-			}
-			out = append(out, TitleResult{
-				Title:    title,
-				Year:     firstNonEmpty(meta.ReleaseInfo, meta.Year),
-				Type:     meta.Type,
-				IMDBID:   imdb,
-				Overview: meta.Description,
-			})
-		}
-		return out, nil
+		return titleResultsFromMetas(resp.Metas), nil
 	}
 	if lastErr != nil {
 		return nil, lastErr

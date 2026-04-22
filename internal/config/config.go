@@ -44,6 +44,9 @@ type Config struct {
 // DefaultCinemetaManifest is the official Cinemeta catalog addon.
 const DefaultCinemetaManifest = "https://v3-cinemeta.strem.io/manifest.json"
 
+// CinemetaAddonID is Stremio's official Cinemeta catalog addon id.
+const CinemetaAddonID = "com.linvo.cinemeta"
+
 func configDir() (string, error) {
 	dir := filepath.Join(xdg.ConfigHome, appDirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -98,7 +101,7 @@ func defaultConfig() *Config {
 	c.UI.DefaultType = "movie"
 	c.Addons = []AddonEntry{
 		{
-			ID:          "com.linvo.cinemeta",
+			ID:          CinemetaAddonID,
 			Name:        "Cinemeta",
 			ManifestURL: DefaultCinemetaManifest,
 			Enabled:     true,

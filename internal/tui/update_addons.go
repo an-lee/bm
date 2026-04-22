@@ -35,7 +35,7 @@ func (m *rootModel) updateAddons(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		if it, ok := m.addonList.SelectedItem().(addonItem); ok {
 			id := it.a.ID
-			if id == "com.linvo.cinemeta" {
+			if id == config.CinemetaAddonID {
 				m.toast = "Refusing to remove Cinemeta"
 				return m, m.tickToast()
 			}

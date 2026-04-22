@@ -15,6 +15,7 @@ func (m *rootModel) renderHelpPanel() string {
 		"Tabs: 1–4 jump · Tab / Shift+Tab cycle (disabled while search or manifest URL field is focused)",
 		"",
 		"Search: Enter run search · ↓ move to results · Enter open streams · ctrl+t or t toggle movie/series",
+		"        ctrl+p Cinemeta popular · ctrl+i Cinemeta featured (current type)",
 		"",
 		"Streams: Enter copy URL · esc or b back · r reload · o cycle sort (rank · rank-asc · addon · title) · [ ] or h l addon filter (when multiple addons)",
 		"",
@@ -45,7 +46,7 @@ func (m *rootModel) View() string {
 		switch m.tab {
 		case tabSearch:
 			typeLine := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
-				fmt.Sprintf("Type: %s · ctrl+t toggle · t toggle (from results list)", m.searchMediaType))
+				fmt.Sprintf("Type: %s · ctrl+t / t toggle · ctrl+p popular · ctrl+i featured (Cinemeta)", m.searchMediaType))
 			body = lipgloss.JoinVertical(lipgloss.Left,
 				m.searchInput.View(),
 				typeLine,

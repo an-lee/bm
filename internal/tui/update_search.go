@@ -12,6 +12,10 @@ func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+t":
 			return m.toggleSearchType()
+		case "ctrl+p":
+			return m, m.runCinemetaPopular()
+		case "ctrl+i":
+			return m, m.runCinemetaFeatured()
 		case "enter":
 			q := strings.TrimSpace(m.searchInput.Value())
 			if q == "" {
@@ -30,6 +34,10 @@ func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+t", "t":
 		return m.toggleSearchType()
+	case "ctrl+p":
+		return m, m.runCinemetaPopular()
+	case "ctrl+i":
+		return m, m.runCinemetaFeatured()
 	case "up", "down", "k", "j":
 		var cmd tea.Cmd
 		m.searchList, cmd = m.searchList.Update(msg)
@@ -55,6 +63,28 @@ func (m *rootModel) runSearch(q string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		res, err := m.app.Search.Search(ctx, q, m.searchMediaType, 0)
+		if err != nil {
+			return searchErrMsg{err}
+		}
+		return searchDoneMsg(res)
+	}
+}
+
+func (m *rootModel) runCinemetaPopular() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		res, err := m.app.Search.CinemetaPopular(ctx, m.searchMediaType, 0)
+		if err != nil {
+			return searchErrMsg{err}
+		}
+		return searchDoneMsg(res)
+	}
+}
+
+func (m *rootModel) runCinemetaFeatured() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		res, err := m.app.Search.CinemetaFeatured(ctx, m.searchMediaType, 0)
 		if err != nil {
 			return searchErrMsg{err}
 		}
