@@ -9,10 +9,8 @@ import (
 )
 
 func (m *rootModel) onTabChange() tea.Cmd {
-	m.quitConfirm = false
-
 	if m.tab != tabSearch {
-		m.searchInput.Blur()
+		m.closeSearchInput()
 	}
 	if m.tab != tabSettings {
 		m.settingsInput.Blur()
@@ -22,11 +20,12 @@ func (m *rootModel) onTabChange() tea.Cmd {
 		m.addonURL.Blur()
 	}
 
-	if m.tab == tabSearch {
-		return textinput.Blink
-	}
 	if m.tab == tabSettings {
 		m.settingsInput.Focus()
+		return textinput.Blink
+	}
+	if m.tab == tabSearch && m.searchActive {
+		m.searchInput.Focus()
 		return textinput.Blink
 	}
 	return nil

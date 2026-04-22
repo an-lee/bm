@@ -14,41 +14,58 @@ import (
 	"bm/internal/streams"
 )
 
-func (m *rootModel) backFromStreams() (tea.Model, tea.Cmd) {
+func (m *rootModel) clearStreamsListState() {
+	m.allResolvedStreams = nil
+	m.streamAddonTabs = nil
+	m.streamsAddonTabIdx = 0
+	m.streamsList.SetItems(nil)
+	m.streamsList.Title = "Streams"
+}
+
+func (m *rootModel) backToBrowse() (tea.Model, tea.Cmd) {
+	m.closeSearchInput()
 	m.tab = tabSearch
 	m.selected = nil
 	m.streamsBusy = false
-	m.allResolvedStreams = nil
-	m.streamAddonTabs = nil
-	m.streamsAddonTabIdx = 0
-	m.streamsList.SetItems(nil)
-	m.streamsList.Title = "Streams"
+	m.episodesBusy = false
+	m.streamsStage = stageEpisodes
+	m.seasonPick, m.episodePick = 0, 0
+	m.seriesMeta = nil
+	m.clearStreamsListState()
+	m.episodesList.SetItems(nil)
 	return m, m.onTabChange()
 }
 
-func (m *rootModel) loadStreamsForSelection() tea.Cmd {
+func (m *rootModel) backFromStreams() (tea.Model, tea.Cmd) {
+	if m.selected == nil {
+		m.tab = tabSearch
+		return m, m.onTabChange()
+	}
+	if m.effectiveMetaType() == "series" && m.streamsStage == stageStreams {
+		m.streamsStage = stageEpisodes
+		m.streamsBusy = false
+		m.clearStreamsListState()
+		return m, m.onTabChange()
+	}
+	return m.backToBrowse()
+}
+
+func (m *rootModel) loadStreamsForEpisode(season, episode int) tea.Cmd {
 	if m.selected == nil {
 		return nil
 	}
-	sel := *m.selected
 	m.streamsBusy = true
-	m.allResolvedStreams = nil
-	m.streamAddonTabs = nil
-	m.streamsAddonTabIdx = 0
-	m.streamsList.SetItems(nil)
-	m.streamsList.Title = "Streams"
+	m.clearStreamsListState()
+	metaType := m.effectiveMetaType()
+	s, e := season, episode
+	if metaType != "series" {
+		s, e = 0, 0
+	}
+	sel := *m.selected
 	imdb := sel.IMDBID
-	metaType := sel.Type
-	if metaType == "" {
-		metaType = m.app.Config.UI.DefaultType
-	}
-	season, episode := 0, 0
-	if metaType == "series" {
-		season, episode = 1, 1
-	}
 	return func() tea.Msg {
 		ctx := context.Background()
-		list, err := m.app.Streams.Resolve(ctx, imdb, metaType, season, episode)
+		list, err := m.app.Streams.Resolve(ctx, imdb, metaType, s, e)
 		if err != nil {
 			return streamsErrMsg{err}
 		}
@@ -84,18 +101,27 @@ func (m *rootModel) cycleStreamsAddon(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m *rootModel) updateStreams(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.selected == nil {
+		return m, nil
+	}
+
+	if m.effectiveMetaType() == "series" && m.streamsStage == stageEpisodes {
+		return m.updateEpisodes(msg)
+	}
+
 	switch msg.String() {
 	case "b":
 		return m.backFromStreams()
 	case "r":
-		if m.selected != nil {
-			return m, m.loadStreamsForSelection()
+		if m.effectiveMetaType() == "series" {
+			return m, m.loadStreamsForEpisode(m.seasonPick, m.episodePick)
 		}
+		return m, m.loadStreamsForEpisode(0, 0)
 	case "o":
 		return m.cycleStreamSortOrder()
-	case "[", "h":
+	case "h":
 		return m.cycleStreamsAddon(-1)
-	case "]", "l":
+	case "l":
 		return m.cycleStreamsAddon(1)
 	case "enter":
 		if it, ok := m.streamsList.SelectedItem().(streamItem); ok {
@@ -183,7 +209,7 @@ func (m *rootModel) renderStreamsAddonTabs() string {
 	prefix := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Addons: ")
 	line := prefix + lipgloss.JoinHorizontal(lipgloss.Top, cells...)
 	if len(m.streamAddonTabs) > 1 {
-		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("  ·  [ ] or h l  filter")
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("  ·  h / l  filter")
 		line += hint
 	}
 	return line

@@ -12,20 +12,19 @@ func (m *rootModel) renderHelpPanel() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).Render("Keyboard shortcuts")
 	text := strings.Join([]string{
 		"",
-		"Tabs: 1–4 jump · Tab / Shift+Tab cycle (disabled while search or manifest URL field is focused)",
+		"Tabs: 1–4 jump · Tab / Shift+Tab cycle (blocked while search or manifest URL field is focused)",
 		"",
-		"Search: Enter run search · ↓ move to results · Enter open streams · ctrl+t or t toggle movie/series",
-		"        ctrl+p Cinemeta popular · ctrl+i Cinemeta featured (current type)",
+		"Browse: / search · Enter run search when search is open · Esc closes search",
+		"        t movie/series · p popular · f featured (Cinemeta) · Enter opens Streams",
 		"",
-		"Streams: Enter copy URL · esc or b back · r reload · o cycle sort (rank · rank-asc · addon · title) · [ ] or h l addon filter (when multiple addons)",
+		"Streams: series → pick episode then streams · Enter copies URL · Esc or b back",
+		"         r reload · o sort · h / l addon filter (when multiple addons)",
 		"",
 		"Addons: a add manifest · d remove · c configure in browser",
 		"",
 		"Settings: Enter save TMDB key",
 		"",
-		"Quit: esc or ctrl+c once to confirm, then y or ctrl+c again · n or esc cancels",
-		"",
-		"? or F1 toggles this help · esc or q closes",
+		"Quit: q or ctrl+c · ? or F1 toggles this help · Esc or q closes help",
 	}, "\n")
 	panel := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -34,6 +33,26 @@ func (m *rootModel) renderHelpPanel() string {
 		Width(max(40, m.width-8)).
 		Render(lipgloss.JoinVertical(lipgloss.Left, title, dim.Render(text)))
 	return panel
+}
+
+func (m *rootModel) renderStreamsBreadcrumb() string {
+	if m.selected == nil {
+		return ""
+	}
+	parts := []string{
+		fmt.Sprintf("%s (%s)", m.selected.Title, m.selected.IMDBID),
+	}
+	if m.effectiveMetaType() == "series" {
+		switch m.streamsStage {
+		case stageEpisodes:
+			parts = append(parts, "Episodes")
+		case stageStreams:
+			if m.seasonPick > 0 || m.episodePick > 0 {
+				parts = append(parts, fmt.Sprintf("S%02d", m.seasonPick), fmt.Sprintf("E%02d", m.episodePick))
+			}
+		}
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(strings.Join(parts, " › "))
 }
 
 func (m *rootModel) View() string {
@@ -45,40 +64,21 @@ func (m *rootModel) View() string {
 	if !m.helpOpen {
 		switch m.tab {
 		case tabSearch:
+			searchLine := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
+				"Press / to search · t type · p popular · f featured (Cinemeta)")
+			if m.searchActive {
+				searchLine = m.searchInput.View()
+			}
 			typeLine := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
-				fmt.Sprintf("Type: %s · ctrl+t / t toggle · ctrl+p popular · ctrl+i featured (Cinemeta)", m.searchMediaType))
+				fmt.Sprintf("Type: %s", m.searchMediaType))
 			body = lipgloss.JoinVertical(lipgloss.Left,
-				m.searchInput.View(),
+				searchLine,
 				typeLine,
 				"",
 				m.searchList.View(),
 			)
 		case tabStreams:
-			head := "Pick a stream, Enter copies URL. esc or b → back to search."
-			if m.selected != nil {
-				head = fmt.Sprintf("%s (%s) — %s", m.selected.Title, m.selected.IMDBID, m.selected.Type)
-			}
-			if m.streamsBusy {
-				head += "\nLoading…"
-			}
-			sortHint := ""
-			if !m.streamsBusy && len(m.allResolvedStreams) > 0 {
-				sortHint = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
-					fmt.Sprintf("Sort: %s · o cycle (rank · rank-asc · addon · title)", m.streamListOrder))
-			}
-			addonStrip := ""
-			if len(m.streamAddonTabs) > 1 {
-				addonStrip = m.renderStreamsAddonTabs() + "\n"
-			}
-			streamSections := []string{head}
-			if sortHint != "" {
-				streamSections = append(streamSections, sortHint)
-			}
-			if addonStrip != "" {
-				streamSections = append(streamSections, addonStrip)
-			}
-			streamSections = append(streamSections, m.streamsList.View())
-			body = lipgloss.JoinVertical(lipgloss.Left, streamSections...)
+			body = m.renderStreamsBody()
 		case tabAddons:
 			extra := ""
 			if m.addonURLMode {
@@ -106,23 +106,18 @@ func (m *rootModel) View() string {
 		body = m.renderHelpPanel()
 	}
 
-	if m.quitConfirm && !m.helpOpen {
-		banner := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214")).
-			Bold(true).
-			Render("Quit?  y  confirm  ·  n / esc  cancel  ·  ctrl+c  confirm quit")
-		body = lipgloss.JoinVertical(lipgloss.Left, banner, "", body)
-	}
-
 	toast := ""
 	if m.toast != "" {
 		toast = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(m.toast)
 	}
-	helpStr := "? help · tab / 1–4 tabs · esc or ctrl+c to quit (confirm)"
+	helpStr := "? help · tab / 1–4 · q quit"
+	if m.tab == tabSearch && !m.helpOpen {
+		helpStr = "? help · tab / 1–4 · / search · t p f · q quit"
+	}
 	if m.tab == tabStreams && !m.helpOpen {
-		helpStr = "? help · tab / 1–4 tabs · esc/b back · ctrl+c quit (confirm) · o sort"
-		if len(m.streamAddonTabs) > 1 {
-			helpStr += " · [ ] / h l addon filter"
+		helpStr = "? help · tab / 1–4 · esc/b back · r reload · o sort · q quit"
+		if m.selected != nil && m.streamsStage == stageStreams && len(m.streamAddonTabs) > 1 {
+			helpStr += " · h/l addons"
 		}
 	}
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(helpStr)
@@ -141,8 +136,49 @@ func (m *rootModel) View() string {
 	return frame
 }
 
+func (m *rootModel) renderStreamsBody() string {
+	if m.selected == nil {
+		return "No title selected. Open Browse (1), pick a title, press Enter."
+	}
+	crumb := m.renderStreamsBreadcrumb()
+	if crumb != "" {
+		crumb = crumb + "\n\n"
+	}
+
+	if m.effectiveMetaType() == "series" && m.streamsStage == stageEpisodes {
+		head := "Pick an episode · Enter to load streams · esc or b back to Browse."
+		if m.episodesBusy {
+			head += "\nLoading episodes…"
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, crumb+head, "", m.episodesList.View())
+	}
+
+	head := "Pick a stream · Enter copies URL · esc or b back."
+	if m.streamsBusy {
+		head += "\nLoading streams…"
+	}
+	sortHint := ""
+	if !m.streamsBusy && len(m.allResolvedStreams) > 0 {
+		sortHint = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
+			fmt.Sprintf("Sort: %s · o cycle", m.streamListOrder))
+	}
+	addonStrip := ""
+	if len(m.streamAddonTabs) > 1 {
+		addonStrip = m.renderStreamsAddonTabs() + "\n"
+	}
+	sections := []string{crumb + head}
+	if sortHint != "" {
+		sections = append(sections, sortHint)
+	}
+	if addonStrip != "" {
+		sections = append(sections, addonStrip)
+	}
+	sections = append(sections, m.streamsList.View())
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
 func (m *rootModel) renderTabs() string {
-	names := []string{"Search", "Streams", "Addons", "Settings"}
+	names := []string{"Browse", "Streams", "Addons", "Settings"}
 	var parts []string
 	for i, n := range names {
 		st := lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("252"))

@@ -12,7 +12,7 @@ go build -o bm ./cmd/bm
 
 ## Quick start
 
-Run the TUI (tabs **1–4**, **Enter** on a stream copies to clipboard):
+Run the TUI (tabs **1–4** Browse / Streams / Addons / Settings; **Enter** on a stream copies to clipboard; **/** to search, **p**/**f** Cinemeta popular/featured):
 
 ```bash
 bm

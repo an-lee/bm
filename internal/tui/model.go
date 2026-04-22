@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -12,6 +13,7 @@ import (
 	"bm/internal/app"
 	"bm/internal/search"
 	"bm/internal/streams"
+	"bm/internal/stremio"
 )
 
 // rootModel is the Bubble Tea root; use pointer receiver so updates persist.
@@ -25,9 +27,18 @@ type rootModel struct {
 	searchList  list.Model
 	searchItems []list.Item
 
-	streamsList list.Model
-	selected    *search.TitleResult
-	streamsBusy bool
+	searchActive bool
+	browseMode   int // browsePopular | browseFeatured | browseSearch
+
+	streamsList  list.Model
+	episodesList list.Model
+	selected     *search.TitleResult
+	streamsBusy  bool
+	episodesBusy bool
+	streamsStage int // stageEpisodes | stageStreams
+	seasonPick   int
+	episodePick  int
+	seriesMeta   *stremio.Meta
 
 	allResolvedStreams []streams.ResolvedStream
 	streamAddonTabs    []streamAddonTab
@@ -44,9 +55,8 @@ type rootModel struct {
 	searchMediaType string
 	lastSearchQuery string
 
-	toast       string
-	helpOpen    bool
-	quitConfirm bool
+	toast    string
+	helpOpen bool
 }
 
 func newRootModel(ap *app.App) *rootModel {
@@ -54,17 +64,25 @@ func newRootModel(ap *app.App) *rootModel {
 	si.Placeholder = "Search movies & series…"
 	si.CharLimit = 200
 	si.Width = 50
-	si.Focus()
+	si.Blur()
 
 	sl := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
-	sl.Title = "Results"
+	sl.Title = "Popular (Cinemeta)"
 	sl.SetShowStatusBar(false)
+	sl.SetFilteringEnabled(false)
 	sl.DisableQuitKeybindings()
 
 	strl := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	strl.Title = "Streams"
 	strl.SetShowStatusBar(false)
+	strl.SetFilteringEnabled(false)
 	strl.DisableQuitKeybindings()
+
+	epL := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	epL.Title = "Episodes"
+	epL.SetShowStatusBar(false)
+	epL.DisableQuitKeybindings()
+	epL.SetFilteringEnabled(false)
 
 	al := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	al.Title = "Addons"
@@ -87,18 +105,21 @@ func newRootModel(ap *app.App) *rootModel {
 		searchInput:     si,
 		searchList:      sl,
 		streamsList:     strl,
+		episodesList:    epL,
 		addonList:       al,
 		addonURL:        aui,
 		settingsInput:   tmdb,
 		searchMediaType: normalizeSearchMediaType(ap.Config.UI.DefaultType),
 		streamListOrder: streams.NormalizeOrder(ap.Config.UI.StreamOrder),
+		browseMode:      browsePopular,
+		streamsStage:    stageEpisodes,
 	}
 	m.refreshAddonList()
 	return m
 }
 
 func (m *rootModel) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.tickToast())
+	return m.runCinemetaPopular()
 }
 
 func (m *rootModel) tickToast() tea.Cmd {
@@ -109,13 +130,29 @@ func (m *rootModel) tickToast() tea.Cmd {
 
 // globalKeysBlocked is true when top-level shortcuts (1–4, tab) would steal keys from a focused text field.
 func (m *rootModel) globalKeysBlocked() bool {
-	if m.tab == tabSearch && m.searchInput.Focused() {
+	if m.tab == tabSearch && m.searchActive && m.searchInput.Focused() {
 		return true
 	}
 	if m.tab == tabAddons && m.addonURLMode && m.addonURL.Focused() {
 		return true
 	}
 	return false
+}
+
+func (m *rootModel) effectiveMetaType() string {
+	if m.selected != nil {
+		t := strings.TrimSpace(m.selected.Type)
+		if t == "series" || t == "movie" {
+			return t
+		}
+	}
+	return normalizeSearchMediaType(m.app.Config.UI.DefaultType)
+}
+
+func (m *rootModel) closeSearchInput() {
+	m.searchActive = false
+	m.searchInput.Blur()
+	m.searchInput.SetValue("")
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -125,6 +162,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h := max(6, m.height-8)
 		m.searchList.SetSize(max(20, m.width-4), h)
 		m.streamsList.SetSize(max(20, m.width-4), h)
+		m.episodesList.SetSize(max(20, m.width-4), h)
 		m.addonList.SetSize(max(20, m.width-4), h)
 		m.searchInput.Width = max(20, m.width-8)
 		return m, nil
@@ -144,23 +182,13 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.quitConfirm {
-			switch ks {
-			case "y", "Y":
-				return m, tea.Quit
-			case "n", "N", "esc":
-				m.quitConfirm = false
-				return m, nil
-			case "ctrl+c":
-				return m, tea.Quit
-			}
+		if ks == "?" || msg.Type == tea.KeyF1 {
+			m.helpOpen = !m.helpOpen
 			return m, nil
 		}
 
-		if ks == "?" || msg.Type == tea.KeyF1 {
-			m.quitConfirm = false
-			m.helpOpen = !m.helpOpen
-			return m, nil
+		if ks == "q" && !m.globalKeysBlocked() {
+			return m, tea.Quit
 		}
 
 		if ks == "esc" {
@@ -169,16 +197,18 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.addonURL.Blur()
 				return m, nil
 			}
+			if m.tab == tabSearch && m.searchActive {
+				m.closeSearchInput()
+				return m, nil
+			}
 			if m.tab == tabStreams {
 				return m.backFromStreams()
 			}
-			m.quitConfirm = true
 			return m, nil
 		}
 
 		if ks == "ctrl+c" {
-			m.quitConfirm = true
-			return m, nil
+			return m, tea.Quit
 		}
 
 		if !m.globalKeysBlocked() {
@@ -216,17 +246,54 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case searchDoneMsg:
-		m.searchItems = make([]list.Item, 0, len(msg))
-		for _, r := range msg {
+		m.searchItems = make([]list.Item, 0, len(msg.items))
+		for _, r := range msg.items {
 			m.searchItems = append(m.searchItems, titleItem{r: r})
 		}
 		m.searchList.SetItems(m.searchItems)
-		m.toast = fmt.Sprintf("%d results", len(msg))
+		m.browseMode = msg.source
+		switch msg.source {
+		case browsePopular:
+			m.searchList.Title = "Popular (Cinemeta)"
+		case browseFeatured:
+			m.searchList.Title = "Featured (Cinemeta)"
+		default:
+			m.searchList.Title = "Search results"
+		}
+		m.toast = fmt.Sprintf("%d results", len(msg.items))
 		return m, m.tickToast()
 
 	case searchErrMsg:
-		m.toast = "search: " + msg.err.Error()
+		m.toast = "browse: " + msg.err.Error()
 		return m, m.tickToast()
+
+	case metaDoneMsg:
+		m.episodesBusy = false
+		if m.selected == nil {
+			return m, nil
+		}
+		m.seriesMeta = msg.meta
+		items := buildEpisodeListItems(msg.meta.Videos)
+		m.episodesList.SetItems(items)
+		for i, it := range items {
+			if _, ok := it.(episodeItem); ok {
+				m.episodesList.Select(i)
+				break
+			}
+		}
+		if len(items) == 0 {
+			m.toast = "no episodes in catalog meta"
+			return m, m.tickToast()
+		}
+		m.toast = fmt.Sprintf("%d rows", len(items))
+		return m, m.tickToast()
+
+	case metaErrMsg:
+		m.episodesBusy = false
+		errStr := msg.err.Error()
+		_, cmd := m.backToBrowse()
+		m.toast = "meta: " + errStr
+		return m, tea.Batch(cmd, m.tickToast())
 
 	case streamsDoneMsg:
 		m.streamsBusy = false

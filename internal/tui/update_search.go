@@ -4,26 +4,28 @@ import (
 	"context"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.searchInput.Focused() {
+	if m.searchActive && m.searchInput.Focused() {
 		switch msg.String() {
-		case "ctrl+t":
-			return m.toggleSearchType()
-		case "ctrl+p":
-			return m, m.runCinemetaPopular()
-		case "ctrl+i":
-			return m, m.runCinemetaFeatured()
 		case "enter":
 			q := strings.TrimSpace(m.searchInput.Value())
 			if q == "" {
+				m.closeSearchInput()
 				return m, nil
 			}
+			m.searchActive = false
+			m.searchInput.Blur()
 			return m, m.runSearch(q)
 		case "down":
 			m.searchInput.Blur()
+			return m, nil
+		case "esc":
+			m.closeSearchInput()
+			return m, nil
 		default:
 			var cmd tea.Cmd
 			m.searchInput, cmd = m.searchInput.Update(msg)
@@ -32,11 +34,22 @@ func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "ctrl+t", "t":
+	case "/":
+		if !m.searchActive {
+			m.searchActive = true
+			m.searchInput.Focus()
+			m.searchInput.SetValue("")
+			return m, textinput.Blink
+		}
+	case "t":
 		return m.toggleSearchType()
-	case "ctrl+p":
+	case "p":
+		m.closeSearchInput()
+		m.lastSearchQuery = ""
 		return m, m.runCinemetaPopular()
-	case "ctrl+i":
+	case "f":
+		m.closeSearchInput()
+		m.lastSearchQuery = ""
 		return m, m.runCinemetaFeatured()
 	case "up", "down", "k", "j":
 		var cmd tea.Cmd
@@ -44,17 +57,31 @@ func (m *rootModel) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case "enter":
 		if it, ok := m.searchList.SelectedItem().(titleItem); ok {
-			m.selected = &it.r
+			sel := it.r
+			m.selected = &sel
 			m.tab = tabStreams
-			return m, tea.Batch(m.loadStreamsForSelection(), m.onTabChange())
+			return m, tea.Batch(m.enterStreamsForSelection(), m.onTabChange())
 		}
 		return m, nil
-	default:
-		m.searchInput.Focus()
-		var cmd tea.Cmd
-		m.searchInput, cmd = m.searchInput.Update(msg)
-		return m, cmd
 	}
+
+	var cmd tea.Cmd
+	m.searchList, cmd = m.searchList.Update(msg)
+	return m, cmd
+}
+
+func (m *rootModel) enterStreamsForSelection() tea.Cmd {
+	if m.selected == nil {
+		return nil
+	}
+	if m.effectiveMetaType() == "series" {
+		m.streamsStage = stageEpisodes
+		m.seriesMeta = nil
+		m.episodesList.SetItems(nil)
+		return m.loadSeriesMeta()
+	}
+	m.streamsStage = stageStreams
+	return m.loadStreamsForEpisode(0, 0)
 }
 
 func (m *rootModel) runSearch(q string) tea.Cmd {
@@ -66,7 +93,7 @@ func (m *rootModel) runSearch(q string) tea.Cmd {
 		if err != nil {
 			return searchErrMsg{err}
 		}
-		return searchDoneMsg(res)
+		return searchDoneMsg{items: res, source: browseSearch}
 	}
 }
 
@@ -77,7 +104,7 @@ func (m *rootModel) runCinemetaPopular() tea.Cmd {
 		if err != nil {
 			return searchErrMsg{err}
 		}
-		return searchDoneMsg(res)
+		return searchDoneMsg{items: res, source: browsePopular}
 	}
 }
 
@@ -88,7 +115,7 @@ func (m *rootModel) runCinemetaFeatured() tea.Cmd {
 		if err != nil {
 			return searchErrMsg{err}
 		}
-		return searchDoneMsg(res)
+		return searchDoneMsg{items: res, source: browseFeatured}
 	}
 }
 
@@ -98,11 +125,29 @@ func (m *rootModel) toggleSearchType() (tea.Model, tea.Cmd) {
 	} else {
 		m.searchMediaType = "movie"
 	}
-	if m.lastSearchQuery == "" {
+	if m.searchActive {
+		q := strings.TrimSpace(m.searchInput.Value())
+		if q != "" {
+			return m, m.runSearch(q)
+		}
 		m.toast = "Type: " + m.searchMediaType
 		return m, m.tickToast()
 	}
-	return m, m.runSearch(m.lastSearchQuery)
+	return m, m.refreshBrowseAfterTypeChange()
+}
+
+func (m *rootModel) refreshBrowseAfterTypeChange() tea.Cmd {
+	switch m.browseMode {
+	case browseFeatured:
+		return m.runCinemetaFeatured()
+	case browseSearch:
+		if strings.TrimSpace(m.lastSearchQuery) != "" {
+			return m.runSearch(m.lastSearchQuery)
+		}
+		fallthrough
+	default:
+		return m.runCinemetaPopular()
+	}
 }
 
 func normalizeSearchMediaType(s string) string {
