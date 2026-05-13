@@ -66,6 +66,9 @@ func (m *rootModel) View() string {
 				"Press / to search · t type · p popular · f featured (Cinemeta)")
 			if m.searchActive {
 				searchLine = m.searchInput.View()
+			} else if m.browseMode == browseSearch && m.lastSearchQuery != "" {
+				searchLine = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
+					"Search: " + m.lastSearchQuery)
 			}
 			typeLine := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(
 				fmt.Sprintf("Type: %s", m.searchMediaType))

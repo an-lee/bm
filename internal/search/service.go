@@ -242,13 +242,17 @@ func (s *Service) searchTMDB(ctx context.Context, query, mediaType string, year 
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
+	tmdbType := mediaType
+	if tmdbType == "series" {
+		tmdbType = "tv"
+	}
 	out := make([]TitleResult, 0, len(parsed.Results))
 	for _, r := range parsed.Results {
 		if r.MediaType == "person" {
 			continue
 		}
 		mt := r.MediaType
-		if mediaType != "" && mt != mediaType {
+		if mediaType != "" && mt != tmdbType {
 			continue
 		}
 		title := r.Title
@@ -270,10 +274,14 @@ func (s *Service) searchTMDB(ctx context.Context, query, mediaType string, year 
 		if err != nil || imdb == "" {
 			continue
 		}
+		outType := mt
+		if outType == "tv" {
+			outType = "series"
+		}
 		out = append(out, TitleResult{
 			Title:    title,
 			Year:     y,
-			Type:     mt,
+			Type:     outType,
 			IMDBID:   imdb,
 			TMDBID:   int(r.ID),
 			Overview: r.Overview,
